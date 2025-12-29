@@ -5,7 +5,11 @@ on:
     branches:
       - main  
   workflow_dispatch:  
-
+  
+permissions:
+  contents: read
+  security-events: write
+  
 env:
   DOCKER_IMAGE_NAME: tusharkshahi/spring-boot-app
   DOCKER_REGISTRY: docker.io
