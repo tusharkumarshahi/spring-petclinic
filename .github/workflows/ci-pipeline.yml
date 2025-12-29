@@ -1,0 +1,120 @@
+name: CI Pipeline - Build and Push Docker Image
+
+on:
+  push:
+    branches:
+      - main  
+  workflow_dispatch:  
+
+env:
+  DOCKER_IMAGE_NAME: tusharkshahi/spring-boot-app
+  DOCKER_REGISTRY: docker.io
+
+jobs:
+  build-and-push:
+    name: Build Application and Push Docker Image
+    runs-on: ubuntu-latest 
+    
+    permissions:
+      contents: read
+      packages: write
+   
+    steps:
+      # Step 1: Checkout the repository code
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for better caching
+     
+      # Step 2: Set up JDK (for Java applications)
+      - name: Set up JDK 11
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'  # Eclipse Temurin (formerly AdoptOpenJDK)
+          cache: 'maven'  # Cache Maven dependencies
+     
+      # Step 3: Build the application
+      - name: Build with Maven
+        run: |
+          echo "Building the application..."
+          mvn clean package -DskipTests
+          echo "Build completed successfully!"
+     
+      # Step 4: Run tests 
+      - name: Run tests
+        run: mvn test
+        continue-on-error: false  # Fail the workflow if tests fail
+     
+      # Step 5: Set up Docker Buildx
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64  # Multi-platform support
+     
+      # Step 6: Log in to Docker Hub
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          logout: true  # Automatically logout after job completion
+     
+      # Step 7: Extract metadata for Docker tags
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_IMAGE_NAME }}
+          tags: |
+            # Generate multiple tags for flexibility
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=raw,value={{date 'YYYYMMDD-HHmmss'}}
+          labels: |
+            org.opencontainers.image.title=Spring Boot Application
+            org.opencontainers.image.description=CI/CD Demo Application
+     
+      # Step 8: Build and push Docker image
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .  # Build context (current directory)
+          file: ./Dockerfile  # Path to Dockerfile
+          push: true  # Push to registry
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha  # GitHub Actions cache
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64  # Target platform(s)
+          # Build arguments (if needed)
+          build-args: |
+            BUILD_DATE=${{ steps.meta.outputs.created }}
+            VCS_REF=${{ github.sha }}
+     
+      # Step 9: Display image details
+      - name: Image digest and tags
+        run: |
+          echo "Docker Image Built Successfully!"
+          echo "Tags: ${{ steps.meta.outputs.tags }}"
+          echo "Digest: ${{ steps.meta.outputs.digest }}"
+          echo "---"
+          echo "You can pull this image with:"
+          echo "docker pull ${{ env.DOCKER_IMAGE_NAME }}:latest"
+    
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.DOCKER_IMAGE_NAME }}:latest
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+     
+      # Step 11: Upload scan results to GitHub Security tab
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()  # Run even if previous steps fail
+        with:
+          sarif_file: 'trivy-results.sarif'
